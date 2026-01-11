@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>LangGraph bindtools测试</title>
+  <style>
+    body { font-family: Arial; margin: 40px; }
+    #chat { border: 1px solid #a3e2f9; height: 500px; overflow-y: auto; padding: 10px; background: #fafafa; }
+    #inputBox { width: 70%; padding: 6px; }
+    button { padding: 6px 12px; }
+    .plan-box {
+      background: #afcfeb;
+      border-left: 4px solid #2196F3;
+      padding: 8px 12px;
+      margin: 6px 0;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <h3>LangGraph bindtools测试</h3>
+  <div id="chat"></div>
+  <input id="inputBox" placeholder="输入消息，回车发送" onkeypress="handleKeyPress(event)" />
+  <!-- 上传文件按钮 -->
+  <input type="file" id="fileInput" style="margin-left: 10px;" />
+  <button onclick="sendMessage()">发送</button>
+
+  <script>
+    const API_BASE = "http://127.0.0.1:2024";   // 与你的 langgraph dev 地址一致
+
+    let threadId = null;
+
+    /* 处理回车键事件 */
+    function handleKeyPress(event) {
+      if (event.key === "Enter") {
+        event.preventDefault();  // 防止回车键在输入框中产生换行
+        sendMessage();
+      }
+    }
+    /* 1. 创建线程（只需一次） */
+    async function createThread() {
+      const res = await fetch(`${API_BASE}/threads`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({})
+      });
+      if (!res.ok) throw new Error("创建线程失败");
+      const data = await res.json();
+      threadId = data.thread_id;
+      console.log("线程 ID:", threadId);
+    }
+    
+    /* 上传文件到后端接口 */
+    async function uploadFile(file) {
+      try {
+        // 创建 FormData 对象
+        const formData = new FormData();
+        formData.append("file", file);
+        
+        // 调用上传接口
+        const uploadUrl = "http://127.0.0.1:8006/upload"; // upload.py 服务地址
+        const response = await fetch(uploadUrl, {
+          method: "POST",
+          body: formData
+        });
+        
+        if (!response.ok) {
+          throw new Error(`上传失败: ${response.status}`);
+        }
+        
+        // 返回上传结果
+        return await response.json();
+      } catch (error) {
+        console.error("文件上传失败:", error);
+        appendChat("system", `文件上传失败: ${error.message}`);
+        return null;
+      }
+    }
+
+    /* 2. 发送消息并流式接收 */
+    async function sendMessage() {
+      const msg = inputBox.value.trim();
+      const fileInput = document.getElementById("fileInput");
+      const file = fileInput.files[0];
+      
+      if (!msg && !file) return;
+      
+      inputBox.value = "";
+      fileInput.value = "";
+      
+      // 构建消息内容
+      let messageContent = msg;
+      let files = [];
+      
+      if (file) {
+        // 先调用上传接口上传文件
+        const uploadResult = await uploadFile(file);
+        if (uploadResult) {
+          const fileInfo = {
+            id: uploadResult.file_id,
+            name: uploadResult.filename,
+            type: uploadResult.content_type,
+            size: file.size,
+            path: uploadResult.path  // 后端返回的文件路径
+          };
+          files.push(fileInfo);
+          
+          // 聊天界面显示用户输入和文件信息
+          appendChat("user", `${msg || '已上传文件'}\n [文件: ${file.name}, ${formatFileSize(file.size)}]`);
+        }
+      } else {
+        appendChat("user", msg);
+      }
+      
+      console.log("当前ID:", threadId);
+      
+      // 构建消息对象
+      const messageObj = {
+        role: "user",
+        content: messageContent
+      };
+      
+      // 3. 发起流式请求（custom 模式，后端用 writer 发 JSON）
+      const resp = await fetch(`${API_BASE}/threads/${threadId}/runs/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          assistant_id: "bridge_bindtools",   // 你的 graph 注册名
+          input: { 
+            messages: [messageObj],
+            files: files  // 文件信息作为独立字段
+          },
+          stream_mode: "custom"            // 对应后端 writer(...) 
+        })
+      });
+
+      if (!resp.ok) {
+        console.error("运行失败", resp.status, resp.statusText);
+        return;
+      }
+
+      /* 4. 逐块解析 */
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      appendChat("bot", "");          // 先占一行
+      const botSpan = document.querySelector('#chat > div:last-child > span');
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";   // 最后一行可能不完整，留到下次
+        for (const l of lines) {
+          if (l.startsWith("data: ")) {
+            const jsonText = l.slice(6).trim();
+            if (!jsonText) continue;  // 心跳行
+            try {
+              const chunk = JSON.parse(jsonText);
+              // 按后端 writer 的字段结构解析
+              if (chunk.event_type === "custom_stream") {
+                botSpan.insertAdjacentText("beforeend", chunk.reply);
+                
+              }
+              else if (chunk.event === "plan_start") {
+                appendPhase(chunk.text);
+                console.log("收到:", chunk.text);
+              }
+              else if (chunk.event === "plan_final") {   // 后端一次性推成品
+                renderPlan(chunk.plan);
+                console.log("收到:", chunk.plan);
+              }
+            } catch (e) {
+              console.warn("解析失败", jsonText, e);
+            }
+          }
+        }
+      }
+      console.log("流式输出完毕");
+    }
+
+    /* 工具函数 */
+    function appendChat(role, text) {
+      const div = document.createElement("div");
+      div.style.margin = "4px 0";
+      // 将换行符转换为 <br> 标签
+      const formattedText = text.replace(/\n/g, "<br>");
+      div.innerHTML = `<b>${role}:</b> <span>${formattedText}</span>`;
+      document.getElementById("chat").appendChild(div);
+      div.scrollIntoView();
+    }
+
+    /* 渲染计划卡片 */
+    function renderPlan(planArr) {
+      const box = document.createElement("div");
+      box.className = "plan-box";
+      box.innerHTML = "<b>📋 执行计划</b><ol>" +
+        planArr.map(p => `<li><code>${p.tool}</code> ${p.desc||""}</li>`).join("") +
+        "</ol>";
+      document.getElementById("chat").appendChild(box);
+      box.scrollIntoView();
+    }
+
+    /* 纯文本阶段提示 */
+    function appendPhase(text) {
+      const div = document.createElement("div");
+      div.style.color = "#666";
+      div.textContent = text;
+      document.getElementById("chat").appendChild(div);
+      div.scrollIntoView();
+    }
+    
+    /* 读取文件为 base64 */
+    function readFileAsBase64(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          // 移除 data URL 前缀（如 "data:image/png;base64,"）
+          const base64 = reader.result.split(',')[1];
+          resolve(base64);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+    }
+    
+    /* 格式化文件大小 */
+    function formatFileSize(bytes) {
+      if (bytes === 0) return '0 Bytes';
+      const k = 1024;
+      const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i];
+    }
+    
+    /* 初始化 */
+    (async () => {
+      await createThread();
+    })();
+  </script>
+</body>
+</html>

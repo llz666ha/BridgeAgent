@@ -1,0 +1,10 @@
+.venv
+.trae
+.vscode
+.langgraph_api
+test/
+3倍3米9.9/
+*.JPG
+*.pyc
+agent/reports/
+agent/retrieval/
