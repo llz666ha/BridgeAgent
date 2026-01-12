@@ -257,7 +257,7 @@ async def planner(state: State, writer: StreamWriter):
         logger.info(parsed_response)
         
         # 验证响应格式是否正确
-        if not isinstance(parsed_response, dict) or "plan" not in parsed_response or "resources" not in parsed_response:
+        if not isinstance(parsed_response, dict) or "plan" not in parsed_response:
             error_message = "计划格式错误，缺少必要字段"
             return {
             "plan": [],
@@ -397,7 +397,7 @@ async def executor(state: State):
     logger.info(
         f"Executor: Step {current_step + 1}/{len(plan)} → {tool_name}"
     )
-
+    # 在此传递了文件信息
     files = state.get("files", [])
     file_context = ""
     if files:
@@ -601,7 +601,6 @@ async def summarizer(state: State, writer:StreamWriter):
                         "event_type": "custom_stream",
                         "messages": final_messages + [{"role": "assistant", "content": accumulated_reply}],
                         "reply": chunk.content,
-                        # "accumulated_reply": accumulated_reply,
                         "is_partial": True
                     })
     except Exception as e:
@@ -613,7 +612,6 @@ async def summarizer(state: State, writer:StreamWriter):
                 "event_type": "custom_stream",
                 "messages": final_messages + [{"role": "assistant", "content": accumulated_reply}],
                 "reply": accumulated_reply,
-                # "accumulated_reply": accumulated_reply,
                 "is_partial": False
             })
     final_messages.append(AIMessage(content=accumulated_reply))
@@ -622,7 +620,6 @@ async def summarizer(state: State, writer:StreamWriter):
     return {
         "messages": final_messages,
         "reply": accumulated_reply,
-        # "accumulated_reply": accumulated_reply,
         "plan": state.get("plan", [])
     }
 
