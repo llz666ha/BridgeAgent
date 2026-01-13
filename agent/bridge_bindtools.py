@@ -213,6 +213,8 @@ async def planner(state: State, writer: StreamWriter):
     # 获取用户输入
     # user_input = messages[-1]['content'] if messages else ""
     # logger.info("用户输入:" + user_input)
+    # #########
+    # 只是-1吗
     conversation = "\n".join(
         f"{m.type}: {m.content}" for m in messages[:-1] 
         if m.type in ['human', 'ai'] and hasattr(m, 'content') and m.content.strip()  # 只包含human和ai类型且内容非空
@@ -670,7 +672,7 @@ graph.add_conditional_edges(
 )
 # graph_png = graph.get_graph().draw_mermaid_png()
 # 编译图，支持流式输出
-app_bindtools = graph.compile(name="bridge_bindtools")
+# app_bindtools = graph.compile(name="bridge_bindtools")
 
 logger.info("BridgeBindTools: 图编译完成，支持流式输出")
 

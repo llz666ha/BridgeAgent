@@ -19,6 +19,10 @@
 </head>
 <body>
   <h3>LangGraph bindtools测试</h3>
+  <div style="margin-bottom: 10px;">
+    <button onclick="newConversation()" style="margin-right: 10px;">新建对话</button>
+    <span id="threadIdDisplay" style="font-size: 12px; color: #666;"></span>
+  </div>
   <div id="chat"></div>
   <input id="inputBox" placeholder="输入消息，回车发送" onkeypress="handleKeyPress(event)" />
   <!-- 上传文件按钮 -->
@@ -39,6 +43,14 @@
     }
     /* 1. 创建线程（只需一次） */
     async function createThread() {
+      // 从localStorage获取线程ID，如果存在则直接使用
+      threadId = localStorage.getItem('threadId');
+      if (threadId) {
+        console.log("使用本地存储的线程 ID:", threadId);
+        updateThreadIdDisplay();
+        return;
+      }
+      
       const res = await fetch(`${API_BASE}/threads`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -47,7 +59,28 @@
       if (!res.ok) throw new Error("创建线程失败");
       const data = await res.json();
       threadId = data.thread_id;
-      console.log("线程 ID:", threadId);
+      // 存储线程ID到localStorage
+      localStorage.setItem('threadId', threadId);
+      console.log("创建并存储线程 ID:", threadId);
+      updateThreadIdDisplay();
+    }
+    
+    /* 新建对话功能 */
+    async function newConversation() {
+      // 1. 清除localStorage中的threadId
+      localStorage.removeItem('threadId');
+      // 2. 清空聊天界面
+      document.getElementById('chat').innerHTML = '';
+      // 3. 创建新的threadId
+      await createThread();
+      // 4. 清空输入框
+      document.getElementById('inputBox').value = '';
+      console.log("已开始新对话");
+    }
+    
+    /* 更新线程ID显示 */
+    function updateThreadIdDisplay() {
+      document.getElementById('threadIdDisplay').textContent = `当前对话ID: ${threadId}`;
     }
     
     /* 上传文件到后端接口 */
@@ -130,7 +163,7 @@
             messages: [messageObj],
             files: files  // 文件信息作为独立字段
           },
-          stream_mode: "custom"            // 对应后端 writer(...) 
+          stream_mode: "custom"            // 对应后端 writer(...)
         })
       });
 
