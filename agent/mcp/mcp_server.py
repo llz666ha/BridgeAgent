@@ -94,6 +94,14 @@ async def weather(
     }
 
 @mcp.tool()
+def add(a: int, b: int) -> dict:
+    """Return a + b."""
+    return {
+        "status": "success",
+        "data":{"sum":a + b}
+    }
+
+@mcp.tool()
 async def joke(
     category: Literal["general", "programming", "knock-knock"] = "general",
     language: Literal["zh", "en"] = "zh"
@@ -210,7 +218,17 @@ async def internet_search(
 
 @mcp.tool()
 async def YOLODetection(image_path) -> str:
-    """使用YOLO模型进行图像识别和目标检测"""
+    """
+    {
+        "description": "用yolo模型检测图像中的病害目标",
+        "outputs": {
+            "status": "success 或 error",
+            "message": "检测状态信息",
+            "data": "包含目标总数、分类统计和每个目标的坐标及类别"
+        },
+        "notes": "返回 JSON 字符串，失败时 data 为 null"
+    }
+    """
     # 从环境变量中读取配置，提供默认值作为后备
     FIXED_IMAGE_PATH = os.getenv("YOLO_DEFAULT_IMAGE_PATH")
     
@@ -281,7 +299,7 @@ async def YOLODetection(image_path) -> str:
 
 @mcp.tool()
 async def YOLOSegmentation(image) -> dict:
-    """使用YOLO模型进行图像分割：输入图像，直接返回分割结果字典。"""
+    """使用YOLO模型进行病害图像分割"""
     try:
         # 导入必要的模块
         from PIL import Image
@@ -337,46 +355,154 @@ async def YOLOSegmentation(image) -> dict:
         return json.dumps(result, ensure_ascii=False)
 
 @mcp.tool()
+def KnowledgeRetrieval(input: any) -> str:
+    """知识库检索:从用户问题中提取检索信息作为输入,返回知识库检索结果。"""
+    logger.info(f"接收到的输入类型: {type(input)}, 内容: {str(input)[:200]}...")
+    url = os.getenv("RAGFLOW_API_URL")
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {os.getenv('RAGFLOW_API_TOKEN')}"     # 替换你的API密钥
+    }
+    data = {
+        "question": input,
+        "dataset_ids": [os.getenv("dataset_id")],
+    }
+    response = requests.post(url, headers=headers, json=data).json()
+    contents = []
+    if response.get("data") and response["data"].get("chunks"):
+        chunks_data = response["data"]["chunks"]
+        # 只保留前两个chunks
+        chunks_data = chunks_data[:2]
+        contents = [item['content'] for item in chunks_data]
+    return json.dumps({
+        "status": "success",
+        "message": "知识库检索成功",
+        "data": contents
+    }, ensure_ascii=False)
+
+@mcp.tool()
 def DamageKnowledgeRetrieval(yolo_result: any) -> str:
-    """病害知识库检索:输入YOLO检测或分割结果,返回病害信息和知识库检索结果。"""
-    logger.info(f"接收到的YOLO结果: {yolo_result}")
+    """知识库检索:输入YOLO检测或分割结果,返回病害信息和知识库检索结果。"""
+    logger.info(f"接收到的YOLO结果类型: {type(yolo_result)}, 内容: {str(yolo_result)[:200]}...")
+    
+    detection_result = None
+    
     try:
-        # 判断输入类型并处理
+        # 处理字符串类型
         if isinstance(yolo_result, str):
-            # 解析JSON字符串
-            detection_result = json.loads(yolo_result)
+            # 尝试解析JSON字符串
+            try:
+                detection_result = json.loads(yolo_result)
+                logger.info("成功解析字符串为JSON")
+            except json.JSONDecodeError as e:
+                logger.warning(f"字符串不是有效的JSON，尝试其他方式: {e}")
+                # 尝试提取JSON部分（可能包含其他文本）
+                import re
+                json_match = re.search(r'\{.*\}', yolo_result, re.DOTALL)
+                if json_match:
+                    try:
+                        detection_result = json.loads(json_match.group())
+                        logger.info("从字符串中提取并解析JSON成功")
+                    except json.JSONDecodeError:
+                        raise ValueError(f"无法从字符串中提取有效JSON: {yolo_result[:100]}")
+                else:
+                    raise ValueError(f"字符串中未找到JSON格式: {yolo_result[:100]}")
+        
+        # 处理字典类型
         elif isinstance(yolo_result, dict):
-            # 直接使用字典
             detection_result = yolo_result
+            logger.info("直接使用字典类型")
+        
+        # 处理列表类型（可能是 ToolMessage 的 content 格式）
         elif isinstance(yolo_result, list):
-            # 处理列表类型，转换为字典
-            logger.warning(f"输入类型为列表，将其转换为字典格式: {type(yolo_result)}")
-            detection_result = {
-                "status": "error",
-                "message": "输入类型错误，应为字典或JSON字符串",
-                "data": {
-                    "type": "detection",
-                    "class_counts": {},
-                    "detections": [],
-                    "total_objects": 0
-                }
-            }       
+            logger.info(f"输入类型为列表，长度: {len(yolo_result)}")
+            # 尝试从列表中提取JSON字符串
+            json_str = None
+            
+            # 情况1: 列表包含字典，字典中有 "text" 字段
+            if len(yolo_result) > 0 and isinstance(yolo_result[0], dict):
+                if "text" in yolo_result[0]:
+                    json_str = yolo_result[0]["text"]
+                    logger.info("从列表[0]['text']中提取到JSON字符串")
+                elif "content" in yolo_result[0]:
+                    json_str = yolo_result[0]["content"]
+                    logger.info("从列表[0]['content']中提取到JSON字符串")
+            
+            # 情况2: 列表直接包含字符串
+            elif len(yolo_result) > 0 and isinstance(yolo_result[0], str):
+                json_str = yolo_result[0]
+                logger.info("列表第一个元素是字符串")
+            
+            # 情况3: 列表包含多个元素，尝试合并
+            elif len(yolo_result) > 1:
+                # 尝试将所有字符串元素合并
+                json_str = "".join(str(item) for item in yolo_result if isinstance(item, str))
+                if json_str:
+                    logger.info("合并列表中的字符串元素")
+            
+            # 如果提取到JSON字符串，尝试解析
+            if json_str:
+                try:
+                    detection_result = json.loads(json_str)
+                    logger.info("成功解析从列表中提取的JSON字符串")
+                except json.JSONDecodeError as e:
+                    logger.error(f"从列表中提取的字符串无法解析为JSON: {e}, 内容: {json_str[:200]}")
+                    raise ValueError(f"列表中的内容不是有效的JSON: {json_str[:100]}")
+            else:
+                # 如果列表本身可能是JSON数组，尝试解析整个列表
+                try:
+                    # 检查列表是否包含字典结构（可能是已解析的JSON）
+                    if len(yolo_result) > 0 and isinstance(yolo_result[0], dict):
+                        # 可能是已经解析好的结果，尝试包装为标准格式
+                        detection_result = {
+                            "status": "success",
+                            "data": yolo_result[0] if "status" not in yolo_result[0] else yolo_result[0]
+                        }
+                        logger.info("将列表中的字典包装为标准格式")
+                    else:
+                        raise ValueError("无法从列表中提取有效数据")
+                except Exception as e:
+                    logger.error(f"无法处理列表格式: {e}")
+                    raise ValueError(f"列表格式无法处理: {type(yolo_result[0]) if yolo_result else 'empty'}")
+        
+        # 其他类型
         else:
-            logger.error(f"输入类型错误，应为字典或JSON字符串，实际为: {type(yolo_result)}")
-            return json.dumps({
-                "status": "error",
-                "message": f"输入类型错误: {type(yolo_result)}",
-                "data": None
-            }, ensure_ascii=False)
-    except json.JSONDecodeError:
-        logger.error("输入的detection_result_json格式错误，无法解析为JSON")
+            logger.error(f"输入类型错误，应为字典、JSON字符串或列表，实际为: {type(yolo_result)}")
+            # 尝试转换为字符串再解析
+            try:
+                str_result = str(yolo_result)
+                detection_result = json.loads(str_result)
+                logger.info("通过字符串转换成功解析")
+            except (json.JSONDecodeError, ValueError):
+                return json.dumps({
+                    "status": "error",
+                    "message": f"输入类型错误: {type(yolo_result)}，无法转换为有效格式",
+                    "damage_info": {},
+                    "retrieval_result": {}
+                }, ensure_ascii=False)
+    
+    except (json.JSONDecodeError, ValueError) as e:
+        logger.error(f"输入的detection_result_json格式错误，无法解析为JSON: {e}")
+        logger.error(f"原始输入: {str(yolo_result)[:500]}")
         result = {
             "status": "error",
-            "message": "输入的detection_result_json格式错误，无法解析为JSON",
+            "message": f"输入的detection_result_json格式错误，无法解析为JSON: {str(e)}",
             "damage_info": {},
             "retrieval_result": {}
         }
         return json.dumps(result, ensure_ascii=False)
+    
+    # 验证解析结果
+    if detection_result is None:
+        logger.error("detection_result 为 None")
+        return json.dumps({
+            "status": "error",
+            "message": "无法解析输入数据",
+            "damage_info": {},
+            "retrieval_result": {}
+        }, ensure_ascii=False)
+    
+    logger.info(f"成功解析检测结果，类型: {type(detection_result)}, status: {detection_result.get('status', 'unknown')}")
     
     def _extract_damage_info(detection_result: Dict[str, Any]) -> Dict[str, Any]:
         """从YOLO检测结果中提取病害信息"""
