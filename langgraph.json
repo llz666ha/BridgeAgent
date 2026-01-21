@@ -1,0 +1,24 @@
+{
+  "graphs": {
+    "bridge": "agent.bridge:app",
+    "bridge_stream": "agent.bridge_stream:app_stream",
+    "bridge_bindtools": "agent.bridge_persist:app_bindtools"
+    
+  },
+  "dependencies": {
+    "requirements": [
+      "langgraph",
+      "langchain",
+      "python-dotenv",
+      "openai",
+      "numpy",
+      "pillow",
+      "opencv-python",
+      "ultralytics",
+      "exifread",
+      "yaml",
+      "requests",
+      "langchain_openai"
+    ]
+  }
+}
